@@ -9,14 +9,17 @@ import random
 import dubins
 from queue import Queue, PriorityQueue
 
-WIDTH = 500
-HEIGHT = 500
+WIDTH = 800
+HEIGHT = 800
 BLACK = (0, 0, 0)
 RED = (255, 0, 0)
 GREEN = (0, 255, 0)
 BLUE = (0, 0, 255)
-turning_radius = 30.0
-
+turning_radius = 50.0
+PRM_RAD = 400
+PRM_PTS = 2000
+OBS_QTY = 15
+OBS_SIZE = 100
 
 def ucs(prmlist, obstacles, start, end):
     """
@@ -28,30 +31,47 @@ def ucs(prmlist, obstacles, start, end):
     """
     frontier = PriorityQueue()
     frontier.put((0, start))  # (priority, node)
-    explored = []
+    frontier.put((0.01, start.rotate180()))
+    explored = set()
     bestEdges = []
+    counter = 0
+
+    endrotate = end.rotate180()
+    prmlist.append(endrotate)
 
     while True:
         if frontier.empty():
+            print("PRM FAIL!!!!!!")
             return None
 
         ucs_w, current_node = frontier.get()
-        explored.append(current_node)
 
-        print('ucs step')
+        if current_node in explored:
+            continue
 
-        if current_node == end:
+        explored.add(current_node)
+
+        if current_node == end or current_node == endrotate:
             break
 
+        counter += 1
+        if counter % 100 == 0:
+            print(ucs_w, counter, len(explored), len(prmlist))
+
         for node in prmlist:
-            if node not in explored:
-                cost = current_node.pathCollide(node, obstacles)
+            if node in explored:
+                continue
 
-                if cost == None:
-                    continue
+            if node.dist(current_node) > PRM_RAD:
+                continue
 
-                bestEdges.append((node, current_node))
-                frontier.put((ucs_w + cost, node))
+            cost = current_node.pathCollide(node, obstacles)
+
+            if cost == None:
+                continue
+
+            bestEdges.append((node, current_node))
+            frontier.put((ucs_w + cost, node))
 
     #backtrack
     print('end', end)
@@ -107,15 +127,26 @@ class Rect(object):
 
         self.geom = [Point(-w/2, h/2), Point(w/2, h/2), Point(w/2, -h/2), Point(-w/2, -h/2)]
 
+        self.pts = []
+        for i in range(4):
+            self.pts.append(self.geom[i].rot(self.theta).offset(self.pos))
+
+        self.poly = None
+
+        self.maxr = math.sqrt(self.w * self.w + self.h * self.h) / 2
+
     def __str__(self):
         return '%.1f %.1f %.1f' % (self.pos.x, self.pos.y, self.theta)
 
-    def getPoints(self):
-        pts = []
+    def recompute(self):
+        self.pts = []
         for i in range(4):
-            pts.append(self.geom[i].rot(self.theta).offset(self.pos))
+            self.pts.append(self.geom[i].rot(self.theta).offset(self.pos))
 
-        return pts
+        self.poly = None
+
+    def getPoints(self):
+        return self.pts
 
     def draw(self, surface):
         color = self.color
@@ -128,10 +159,20 @@ class Rect(object):
             pygame.draw.line(surface, color, p1.drawtup(), p2.drawtup(), 2)
 
     def getPoly(self):
-        pts = self.getPoints()
-        return Polygon([pts[0].drawtup(), pts[1].drawtup(), pts[2].drawtup(), pts[3].drawtup()])
+        pts = self.pts
+
+        if self.poly == None:#polygons are slow, make it only if needed
+            self.poly = Polygon([pts[0].drawtup(), pts[1].drawtup(), pts[2].drawtup(), pts[3].drawtup()])
+
+        return self.poly
 
     def collide(self, rect2):
+        centerdist = self.pos.dist(rect2.pos)
+
+        if centerdist > self.maxrad() + rect2.maxrad(): #quick coll check
+            return False
+
+
         poly1 = self.getPoly()
         poly2 = rect2.getPoly()
 
@@ -139,6 +180,12 @@ class Rect(object):
 
     def dist(self, rect2):
         return self.pos.dist(rect2.pos)
+
+    def maxrad(self):
+        return self.maxr
+
+    def __lt__(self, other):
+        return 0
 
 
 class Car(Rect):
@@ -156,11 +203,19 @@ class Car(Rect):
         return dubinsCars
 
     def pathCollide(self, end, obstacles):
-        dubinsCars = self.path(end, 20)
+        path = dubins.shortest_path((self.pos.x, self.pos.y, self.theta), (end.pos.x, end.pos.y, end.theta), turning_radius)
+        configurations, lens = path.sample_many(30)
 
-        for dc in dubinsCars:
+        car = Car(Point(0, 0), 0)
+
+        for cfg in configurations:
+            car.pos.x = cfg[0]
+            car.pos.y = cfg[1]
+            car.theta = cfg[2]
+            car.recompute()
+
             for obs in obstacles:
-                if obs.collide(dc):
+                if obs.collide(car):
                     return None
 
         return self.pathlen(end)
@@ -169,6 +224,9 @@ class Car(Rect):
         path = dubins.shortest_path((self.pos.x, self.pos.y, self.theta), (end.pos.x, end.pos.y, end.theta), turning_radius)
 
         return path.path_length()
+
+    def rotate180(self):
+        return Car(self.pos, self.theta)
 
 
 def main():
@@ -184,15 +242,16 @@ def main():
 
     obstacles = []
 
-    for i in range(10):
+    for i in range(OBS_QTY):
         pos = Point(np.random.uniform() * WIDTH, np.random.uniform() * HEIGHT)
-        obstacles.append(Rect(pos, 50, 50, 0, BLUE))
+        obstacles.append(Rect(pos, OBS_SIZE, OBS_SIZE, 0, BLUE))
 
 
     carPRM = []
-    for i in range(50):
+    for i in range(PRM_PTS):
         pos = Point(np.random.uniform() * WIDTH, np.random.uniform() * HEIGHT)
         trycar = Car(pos, np.random.uniform() * np.pi)
+        trycar.color = (200, 200, 200)
 
         coll = False
         for obs in obstacles:
@@ -204,12 +263,18 @@ def main():
 
 
     start = random.choice(carPRM)
-    start.color = RED
+    while start.pos.x > WIDTH * 0.25:
+        start = random.choice(carPRM)
+
     end = random.choice(carPRM)
+    while end.pos.x < WIDTH * 0.75:
+        end = random.choice(carPRM)
+
+
+    start.color = RED
     end.color = GREEN
 
-    path = ucs(carPRM, obstacles, start, end)
-
+    path = None
 
     going = True
     while going:
@@ -225,23 +290,24 @@ def main():
         for obs in obstacles:
             obs.draw(screen)
 
-        for c in path:
-            #c.color = (150, 150, 150)
+        for c in carPRM:
             c.draw(screen)
-        #print(path)
 
+        if path is not None:
+            for i in range(len(path) - 1):
+                dc = path[i].path(path[i + 1], 5)
 
-        for i in range(len(path) - 1):
-            dc = path[i].path(path[i + 1], 5)
-
-            for d in dc:
-                d.draw(screen)
-
+                for d in dc:
+                    d.draw(screen)
 
         start.draw(screen)
         end.draw(screen)
 
         pygame.display.flip()
+
+
+        if path is None:
+            path = ucs(carPRM, obstacles, start, end)
 
     pygame.quit()
 
