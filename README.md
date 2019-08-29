@@ -38,4 +38,5 @@ The performance is bad. Like not good. These kind of algorithms must really be i
 
 Randomly generated obstacles and start/stop points
 
-![ex1](ex1.png)
+![ex1](img/ex1.png)
+![ex2](img/ex2.png)
